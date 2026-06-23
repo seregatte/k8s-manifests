@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ssh-backup
+spec:
+  schedule: "0 0 * * *"
+  timeZone: UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: instrumentisto/rsync-ssh:alpine
+              command:
+                - /bin/sh
+                - /scripts/backup.sh
+              env:
+                - name: BACKUP_HOST
+                  value: example.invalid
+                - name: BACKUP_USER
+                  value: backup
+                - name: BACKUP_PORT
+                  value: "22"
+                - name: REMOTE_PATHS
+                  value: /data
+                - name: DESTINATION
+                  value: /backup
+                - name: RETENTION_DAYS
+                  value: "30"
+                - name: REQUIRED_MOUNTPOINT
+                  value: /backup
+              volumeMounts:
+                - name: backup-script
+                  mountPath: /scripts/backup.sh
+                  subPath: backup.sh
+                  readOnly: true
+                - name: ssh-key
+                  mountPath: /root/.ssh/id_ed25519
+                  subPath: id_ed25519
+                  readOnly: true
+                - name: backup-storage
+                  mountPath: /backup
+          volumes:
+            - name: backup-script
+              configMap:
+                name: ssh-backup-script
+                defaultMode: 0755
+            - name: ssh-key
+              secret:
+                secretName: ssh-backup
+                defaultMode: 0400
+            - name: backup-storage
+              hostPath:
+                path: /backup
+                type: Directory
