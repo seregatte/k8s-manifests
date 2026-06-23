@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ssh-backup-script
+data:
+  backup.sh: |
+    #!/bin/sh
+    set -eu
+
+    : "${BACKUP_HOST:?missing BACKUP_HOST}"
+    : "${BACKUP_USER:?missing BACKUP_USER}"
+    : "${REMOTE_PATHS:?missing REMOTE_PATHS}"
+    : "${DESTINATION:?missing DESTINATION}"
+
+    BACKUP_PORT="${BACKUP_PORT:-22}"
+    RETENTION_DAYS="${RETENTION_DAYS:-30}"
+    REQUIRED_MOUNTPOINT="${REQUIRED_MOUNTPOINT:-}"
+    TIMESTAMP="$(date -u +%Y%m%d_%H%M%S)"
+
+    if [ -n "$REQUIRED_MOUNTPOINT" ] && ! grep -q " ${REQUIRED_MOUNTPOINT} " /proc/mounts; then
+      echo "required mountpoint not present: ${REQUIRED_MOUNTPOINT}" >&2
+      exit 1
+    fi
+
+    SNAPSHOTS_DIR="${DESTINATION}/snapshots"
+    TMP_DIR="${DESTINATION}/tmp"
+    LATEST_LINK="${SNAPSHOTS_DIR}/latest"
+    PARTIAL_DIR="${TMP_DIR}/partial-${TIMESTAMP}"
+    BACKUP_DIR="${SNAPSHOTS_DIR}/${TIMESTAMP}"
+
+    mkdir -p "${SNAPSHOTS_DIR}" "${TMP_DIR}"
+
+    cleanup_partial() {
+      if [ -d "${PARTIAL_DIR}" ]; then
+        rm -rf "${PARTIAL_DIR}"
+      fi
+    }
+    trap cleanup_partial EXIT INT TERM
+
+    mkdir -p "${PARTIAL_DIR}"
+
+    LINK_DEST=""
+    if [ -L "${LATEST_LINK}" ] || [ -d "${LATEST_LINK}" ]; then
+      LINK_DEST="--link-dest=${LATEST_LINK}"
+    fi
+
+    set --
+    for remote_path in ${REMOTE_PATHS}; do
+      set -- "$@" "${BACKUP_USER}@${BACKUP_HOST}:${remote_path}"
+    done
+
+    SSH_CMD="ssh -p ${BACKUP_PORT} -i /root/.ssh/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null"
+
+    if ! rsync -e "${SSH_CMD}" \
+      -a -H -A -X --numeric-ids --delete --delete-excluded --relative \
+      ${LINK_DEST:+${LINK_DEST}} \
+      "$@" \
+      "${PARTIAL_DIR}/"; then
+      echo "rsync failed" >&2
+      exit 1
+    fi
+
+    mv "${PARTIAL_DIR}" "${BACKUP_DIR}"
+    rm -f "${LATEST_LINK}"
+    ln -s "${BACKUP_DIR}" "${LATEST_LINK}"
+
+    find "${SNAPSHOTS_DIR}" -maxdepth 1 -mindepth 1 -type d \
+      ! -path "${BACKUP_DIR}" -mtime +"${RETENTION_DAYS}" \
+      -exec rm -rf -- {} \;
+
+    trap - EXIT INT TERM
