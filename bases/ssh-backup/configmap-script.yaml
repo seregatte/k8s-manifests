@@ -40,8 +40,10 @@ data:
     mkdir -p "${PARTIAL_DIR}"
 
     LINK_DEST=""
-    if [ -L "${LATEST_LINK}" ] || [ -d "${LATEST_LINK}" ]; then
+    if [ -d "${LATEST_LINK}" ]; then
       LINK_DEST="--link-dest=${LATEST_LINK}"
+    elif [ -e "${LATEST_LINK}" ] || [ -L "${LATEST_LINK}" ]; then
+      echo "Ignoring invalid latest snapshot link: ${LATEST_LINK}" >&2
     fi
 
     set --
